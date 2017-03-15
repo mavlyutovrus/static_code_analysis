@@ -479,22 +479,16 @@ def expand(node, source, get_var_type_func, root_node):
         return [[node]]
     if node == THIS:
         return [[THIS]]
-    """
-    if '((pid != null) ? ("pid " + pid) : "unknown pid")' in node.get_snippet(source).replace("\n", " "):
-        print node.labels
-        print node.get_snippet(source).replace("\n", " ")
-        print "---"
-    """
     if "expr.StringLiteralExpr" in node.labels:
-        return [[node.get_snippet(source).strip()[1:-1]]]
+        return [[node.get_snippet(source).strip()[1:-1].replace("\\\"", "\"").replace("\\n", "<BR>").replace("\\t", "<TAB>") ]]
+    if "expr.CharLiteralExpr" in node.labels:
+        return [[node.get_snippet(source).strip()[1:-1].replace("\\\"", "\"").replace("\\n", "<BR>").replace("\\t", "<TAB>") ]]
     if "expr.IntegerLiteralExpr" in node.labels:
         return [[node.get_snippet(source)]]
     if "expr.DoubleLiteralExpr" in node.labels:
         return [[node.get_snippet(source)]]
     if "expr.BooleanLiteralExpr" in node.labels:
         return [[node.get_snippet(source)]]
-    if "expr.CharLiteralExpr" in node.labels:
-        return [[node.get_snippet(source).strip()[1:-1]]]
     if "expr.NullLiteralExpr" in node.labels:
         return [["null"]]
     if "expr.BinaryExpr" in node.labels or 'expr.EnclosedExpr' in node.labels:
@@ -924,44 +918,80 @@ for fcn, data in fcn_dict.items():
             if not unrolled_log_line_elements:
                 continue
 
-            for unrolled_param_set in unrolled_log_line_elements:
-                serialized_param_set = []
-                for param_index in xrange(len(unrolled_param_set)):
-                    param_nodes = unrolled_param_set[param_index]
-                    serialized_param = []
-                    for node in param_nodes:
-                        if type(node) == str:
-                            string_constant = node
-                            string_constant = string_constant.replace("\\\"", "\"").replace("\\n", "<BR>").replace("\\t", "<TAB>")
-                            serialized_param += ["SC:" + string_constant]
-                        elif node == THIS:
-                            serialized_param += ["VR:" + fcn + ":::this"]
-                        elif set(["expr.SimpleName", "expr.NameExpr"]) & node.labels:
-                            node_type = get_var_type_func(node)
-                            node_snippet = node.get_snippet(source).strip().replace("\n", " ")
-                            serialized_param += ["VR:" + str(node_type) + ":::" + node_snippet]
-                        elif "expr.MethodCallExpr" in node.labels or "expr.FieldAccessExpr" in node.labels:
-                            caller_type = None
-                            node_snippet = node.get_snippet(source).strip().replace("\n", " ")
-                            if node_snippet.find("(") > 0 and  node_snippet.find("(") < node.get_snippet(source).find(".") or node.get_snippet(source).find(".") < 0:
-                                print "CHEEECK", node_snippet
-                                caller_type = fcn
-                            else:
-                                caller = node
-                                while caller.children:
-                                    caller = caller.children[0]
-                                caller_snippet = caller.get_snippet(source).strip()
-                                if "expr.ThisExpr" in caller.labels:
-                                    caller_type = fcn
-                                elif caller_snippet.startswith("org.") or caller_snippet.startswith("java.") or caller_snippet[0].isupper():
-                                    caller_type = caller_snippet
-                                else:
-                                    caller_type = get_var_type_func(caller)
-                            serialized_param += ["MC:" + str(caller_type) + ":::" + node_snippet]
+            unrolled_log_line_elements_merged = []
+            if 1:
+                for unrolled_param_set in unrolled_log_line_elements:
+                    final_set_of_nodes = []
+                    first_param_nodes = unrolled_param_set[0]
+                    used_params = set()
+                    curr_param_index = 1
+                    added_param_sets = 0
+                    for node in first_param_nodes:
+                        if type(node) != str:
+                            final_set_of_nodes.append(node)
+                            continue
+                        string_constant = node
+                        placeholders = re.findall("\{[0-9]*\}", string_constant)
+                        #print placeholders, [string_constant], unrolled_param_set
+                        for placeholder in placeholders:
+                            plhld_pos = string_constant.find(placeholder)
+                            prefix, string_constant = string_constant[:plhld_pos], string_constant[plhld_pos + len(placeholder):]
+                            if prefix:
+                                final_set_of_nodes.append(prefix)
+                            if placeholder[1:-1]:
+                                curr_param_index = int(placeholder[1:-1]) + 1
+
+                            if curr_param_index >= len(unrolled_param_set):
+                                print "WTF:", [curr_param_index], unrolled_param_set
+                                curr_param_index = len(unrolled_param_set) - 1
+                            used_params.add(curr_param_index)
+                            final_set_of_nodes += unrolled_param_set[curr_param_index]
+                            added_param_sets += 1
+                            curr_param_index += 1
+                        if string_constant:
+                            final_set_of_nodes.append(string_constant)
+                    for param_index in xrange(1, len(unrolled_param_set)):
+                        if not param_index in used_params:
+                            final_set_of_nodes += unrolled_param_set[param_index]
+                            added_param_sets += 1
+                    if added_param_sets + 1 != len(unrolled_param_set):
+                        print "FADASDADSFADSFASDFASDFADAFUKUCUP", added_param_sets, len(unrolled_param_set)
+                        print method_node.get_snippet(source)
+                        print "----"
+                    unrolled_log_line_elements_merged += [final_set_of_nodes]
+
+            for log_line_nodes in unrolled_log_line_elements_merged:
+                serialized_param = []
+                for node in log_line_nodes:
+                    if type(node) == str:
+                        serialized_param += ["SC:" + node]
+                    elif node == THIS:
+                        serialized_param += ["VR:" + fcn + ":::this"]
+                    elif set(["expr.SimpleName", "expr.NameExpr"]) & node.labels:
+                        node_type = get_var_type_func(node)
+                        node_snippet = node.get_snippet(source).strip().replace("\n", " ")
+                        serialized_param += ["VR:" + str(node_type) + ":::" + node_snippet]
+                    elif "expr.MethodCallExpr" in node.labels or "expr.FieldAccessExpr" in node.labels:
+                        caller_type = None
+                        node_snippet = node.get_snippet(source).strip().replace("\n", " ")
+                        if node_snippet.find("(") > 0 and  node_snippet.find("(") < node.get_snippet(source).find(".") or node.get_snippet(source).find(".") < 0:
+                            #print "CHEEECK", node_snippet
+                            caller_type = fcn
                         else:
-                            serialized_param += ["UN:" + "_" + ":::" + node.get_snippet(source).strip().replace("\n", " ")]
-                    serialized_param_set.append(">><<<".join(serialized_param))
-                print "SPS:\t" + "<>>>>>>>___".join(serialized_param_set)
+                            caller = node
+                            while caller.children:
+                                caller = caller.children[0]
+                            caller_snippet = caller.get_snippet(source).strip()
+                            if "expr.ThisExpr" in caller.labels:
+                                caller_type = fcn
+                            elif caller_snippet.startswith("org.") or caller_snippet.startswith("java.") or caller_snippet[0].isupper():
+                                caller_type = caller_snippet
+                            else:
+                                caller_type = get_var_type_func(caller)
+                        serialized_param += ["MC:" + str(caller_type) + ":::" + node_snippet]
+                    else:
+                        serialized_param += ["UN:" + "_" + ":::" + node.get_snippet(source).strip().replace("\n", " ")]
+                print "SPS:\t" + "<>>>>>>>___".join(serialized_param)
 print log_exps
 print expanded
 
