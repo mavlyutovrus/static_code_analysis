@@ -2,6 +2,8 @@ from infer_type_mod import resolve_type
 from utils import *
 
 
+globals = {}
+
 def cortesian_sum(list_of_lists):
     if not list_of_lists:
         return []
@@ -69,8 +71,13 @@ def extract_log_calls_from_method_declartion(method_decl_node):
         node = node_stack[-1]
         if "expr.MethodCallExpr" in node.labels:
             method_call_text = node.get_snippet(source).lower()
-            pre_call_snippet = method_call_text.split("(")[0]
-            if pre_call_snippet.endswith("log.debug") or pre_call_snippet.endswith("log.warn") or pre_call_snippet.endswith("log.info"):
+            pre_call_snippet = method_call_text.split("(")[0].strip()
+            if pre_call_snippet.endswith("log.debug") or pre_call_snippet.endswith("log.warn") \
+                    or pre_call_snippet.endswith("log.info") or pre_call_snippet.endswith("logauditmessage"):
+                #if pre_call_snippet.endswith("logauditmessage"):
+                #    print "CHHEEEEECKKKKKK"
+                #    print method_call_text
+                #    print "--"
                 log_call_stacks.append([item for item in node_stack])
                 return False
         return True
@@ -484,13 +491,13 @@ def expand(node, source, get_var_type_func, root_node):
     if "expr.CharLiteralExpr" in node.labels:
         return [[node.get_snippet(source).strip()[1:-1].replace("\\\"", "\"").replace("\\n", "<BR>").replace("\\t", "<TAB>") ]]
     if "expr.IntegerLiteralExpr" in node.labels:
-        return [[node.get_snippet(source)]]
+        return [[node.get_snippet(source)], []]
     if "expr.DoubleLiteralExpr" in node.labels:
-        return [[node.get_snippet(source)]]
+        return [[node.get_snippet(source)], []]
     if "expr.BooleanLiteralExpr" in node.labels:
-        return [[node.get_snippet(source)]]
+        return [[node.get_snippet(source)], []]
     if "expr.NullLiteralExpr" in node.labels:
-        return [["null"]]
+        return [["null"], []]
     if "expr.BinaryExpr" in node.labels or 'expr.EnclosedExpr' in node.labels:
         outputs = [[]]
         for subnode in node.children:
@@ -608,11 +615,14 @@ def expand(node, source, get_var_type_func, root_node):
             for subnode in all_nodes_post_order(params[0]):
                 if "expr.BinaryExpr" in subnode.labels:
                     continue
+                if set(['expr.NameExpr', 'expr.SimpleName']) & subnode.labels and subnode.get_snippet(source) in globals:
+                    print "YAMMI", subnode.get_snippet(source), globals[subnode.get_snippet(source)]
+                    format_string += globals[subnode.get_snippet(source)][0]
+                    continue
                 if not "expr.StringLiteralExpr" in subnode.labels:
                     print "FUCKU11111P", subnode.labels
                     print node.get_snippet(source)
                     return [[node]]
-                    exit()
                 format_string += subnode.get_snippet(source).strip()[1:-1]
 
             import re
@@ -868,6 +878,58 @@ for line in open("all_classes_detailed_info_with_resolved_vars.txt"):
     extended_variables = [item.split() for item in extended_variables.split("|") if item]
     fcn_dict[fcn] = (fcn, fname, first, last, extents, imports, type_params, extended_variables, package)
 
+for fcn, data in fcn_dict.items():
+    processed += 1
+    if processed % 1000 == 0:
+        print "..uploaded", processed, stat
+    fcn, fname, first, last, extents, imports, type_params, extended_variables, package = data
+    source = open(fname).read()
+    class_node = get_class_node(first, last, fname, fcn, source)
+    for node in class_node.children:
+        if not 'body.FieldDeclaration' in node.labels:
+            continue
+        snippet = node.get_snippet(source)
+        if not " String " in snippet or not " final " in snippet:
+            continue
+        initial_node = node
+        node = node.children[-1]
+        if len(node.children) != 2:
+            continue
+        var_name, var_value = node.children
+        var_name = var_name.get_snippet(source)
+        unrolled = []
+        deque = [var_value]
+        parsable = True
+        while deque and parsable:
+            curr = deque[0]
+            deque = deque[1:]
+            if "expr.StringLiteralExpr" in curr.labels or "expr.CharLiteralExpr" in curr.labels:
+                unrolled += [curr.get_snippet(source).strip()[1:-1].replace("\\\"", "\"").replace("\\n", "<BR>").replace("\\t", "<TAB>")]
+            elif "expr.BinaryExpr" in curr.labels or 'expr.EnclosedExpr' in curr.labels:
+                deque = curr.children + deque
+            elif set(['expr.NameExpr', 'expr.SimpleName']) & curr.labels:
+                if curr.get_snippet(source) in globals:
+                    unrolled += [globals[curr.get_snippet(source)][0]]
+                else:
+                    parsable = False
+                    break
+            elif "expr.FieldAccessExpr" in curr.labels or 'expr.ObjectCreationExpr' in curr.labels:
+                parsable = False
+                break
+            elif 'expr.MethodCallExpr' in curr.labels:
+                parsable = False
+                break
+            elif 'expr.ConditionalExpr' in curr.labels:
+                parsable = False
+                break
+            else:
+                parsable = False
+                break
+        #if "START_MESSAGE" in var_name:
+        #    print var_name, parsable, unrolled, [node.get_snippet(source).replace("\n", " ") for node in deque]
+        if parsable:
+            globals.setdefault(var_name, []).append("".join(unrolled))
+
 
 processed = 0
 log_exps = 0
@@ -991,7 +1053,7 @@ for fcn, data in fcn_dict.items():
                         serialized_param += ["MC:" + str(caller_type) + ":::" + node_snippet]
                     else:
                         serialized_param += ["UN:" + "_" + ":::" + node.get_snippet(source).strip().replace("\n", " ")]
-                print "SPS:\t" + "<>>>>>>>___".join(serialized_param)
+                print "SPS:\t" + fcn + "RRRRRRRR" + package + "RRRRRRRR" + "<>>>>>>>___".join(serialized_param)
 print log_exps
 print expanded
 
